@@ -42,6 +42,9 @@ alert attempts.
    function `checkETHPrice`, event source *Time-driven*, every 15 minutes.
 6. Run `checkETHPrice` once from the editor to grant the OAuth permissions
    (Spreadsheets + external requests).
+7. Run `sendTestSMS` from the editor to verify end-to-end SMS delivery; the
+   result appears in the execution log (and a test message arrives on your
+   phone if everything is configured).
 
 If the Twilio properties are missing, the script still logs prices normally;
 an alert that would have fired is recorded as

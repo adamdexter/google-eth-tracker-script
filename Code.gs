@@ -56,6 +56,15 @@ function checkETHPrice() {
   }
 }
 
+/**
+ * Manual test: run this from the editor to verify Twilio is configured and
+ * delivering. Check the execution log for the result.
+ */
+function sendTestSMS() {
+  const result = sendSMS_("Test from ETH Price Monitor - SMS alerts are working");
+  Logger.log("Test SMS result: " + result);
+}
+
 /** Fetches the ETH-USD spot price from Coinbase. Returns null on failure. */
 function fetchPrice_() {
   for (let attempt = 0; attempt < 2; attempt++) {
