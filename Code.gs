@@ -3,7 +3,7 @@
  *
  * Logs the ETH-USD spot price to the "ETH Monitor" sheet every 15 minutes
  * (via a time-driven trigger on checkETHPrice) and sends an SMS through
- * Twilio when the price crosses a configured threshold.
+ * Twilio when the price crosses any configured threshold.
  *
  * Twilio credentials are read from Script Properties — never hardcode them.
  * Set these in the Apps Script editor under Project Settings (gear icon) →
@@ -17,11 +17,15 @@
 const COINBASE_API = "https://api.coinbase.com/v2/prices/ETH-USD/spot";
 const SHEET_NAME = "ETH Monitor";
 
-// Alert configuration.
-const ALERT_THRESHOLD = 4000;    // USD
-const ALERT_DIRECTION = "ABOVE"; // "ABOVE" = alert when price >= threshold,
-                                 // "BELOW" = alert when price <= threshold
-const COOLDOWN_MINUTES = 60;     // minimum minutes between alerts
+// Alert configuration. Each entry sends one SMS when the price crosses its
+// threshold, then stays quiet until the price moves back across the
+// threshold (re-arming it), so a price that sits above a threshold doesn't
+// text you every run.
+const ALERTS = [
+  { threshold: 3000, direction: "ABOVE" }, // alert when price >= 3000
+  { threshold: 4000, direction: "ABOVE" }, // alert when price >= 4000
+];
+const COOLDOWN_MINUTES = 60; // min minutes between SMS for the same threshold
 
 /** Entry point, run by the 15-minute time-driven trigger. */
 function checkETHPrice() {
@@ -32,27 +36,47 @@ function checkETHPrice() {
   }
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const props = PropertiesService.getScriptProperties();
 
-  const crossed =
-    (ALERT_DIRECTION === "ABOVE" && price >= ALERT_THRESHOLD) ||
-    (ALERT_DIRECTION === "BELOW" && price <= ALERT_THRESHOLD);
+  // Work out which alerts just crossed, and re-arm any that un-crossed.
+  const due = [];
+  for (const alert of ALERTS) {
+    const crossed =
+      (alert.direction === "ABOVE" && price >= alert.threshold) ||
+      (alert.direction === "BELOW" && price <= alert.threshold);
+    const key = alertKey_(alert);
 
-  if (!crossed || !cooldownElapsed_()) {
+    if (crossed) {
+      if (!props.getProperty("FIRED_" + key) && cooldownElapsed_(key)) {
+        due.push(alert);
+      }
+    } else if (props.getProperty("FIRED_" + key)) {
+      // Price moved back across the threshold — re-arm this alert.
+      props.deleteProperty("FIRED_" + key);
+    }
+  }
+
+  if (due.length === 0) {
     sheet.appendRow([new Date(), price]);
     return;
   }
 
-  const verb = ALERT_DIRECTION === "ABOVE" ? "above" : "below";
+  // One SMS covers every threshold crossed this run.
+  const parts = due.map(function (a) {
+    return (a.direction === "ABOVE" ? "above" : "below") + " $" + a.threshold;
+  });
   const status = sendSMS_(
-    "\u{1F6A8} ETH is " + verb + " $" + ALERT_THRESHOLD + ": current price $" + price
+    "\u{1F6A8} ETH is " + parts.join(" and ") + ": current price $" + price
   );
   sheet.appendRow([new Date(), price, status]);
 
   if (status === "ALERT_SENT") {
-    PropertiesService.getScriptProperties().setProperty(
-      "LAST_ALERT_AT",
-      String(Date.now())
-    );
+    const now = String(Date.now());
+    for (const alert of due) {
+      const key = alertKey_(alert);
+      props.setProperty("FIRED_" + key, "1");
+      props.setProperty("LAST_ALERT_AT_" + key, now);
+    }
   }
 }
 
@@ -63,6 +87,11 @@ function checkETHPrice() {
 function sendTestSMS() {
   const result = sendSMS_("Test from ETH Price Monitor - SMS alerts are working");
   Logger.log("Test SMS result: " + result);
+}
+
+/** Stable Script Properties key suffix for one alert. */
+function alertKey_(alert) {
+  return alert.direction + "_" + alert.threshold;
 }
 
 /** Fetches the ETH-USD spot price from Coinbase. Returns null on failure. */
@@ -84,9 +113,11 @@ function fetchPrice_() {
   return null;
 }
 
-/** True if no alert was sent within the last COOLDOWN_MINUTES. */
-function cooldownElapsed_() {
-  const last = PropertiesService.getScriptProperties().getProperty("LAST_ALERT_AT");
+/** True if this alert hasn't sent an SMS within the last COOLDOWN_MINUTES. */
+function cooldownElapsed_(key) {
+  const last = PropertiesService.getScriptProperties().getProperty(
+    "LAST_ALERT_AT_" + key
+  );
   if (!last) {
     return true;
   }
